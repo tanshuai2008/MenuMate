@@ -18,6 +18,10 @@ from PIL import Image
 
 load_dotenv()
 
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+if "menu_context" not in st.session_state:
+    st.session_state.menu_context = None
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 GEMINI_MODEL = "gemini-2.5-flash"
@@ -172,6 +176,8 @@ def _image_to_b64(img: Image.Image) -> str:
     img.save(buf, format="JPEG", quality=85)
     return base64.b64encode(buf.getvalue()).decode()
 
+def _audio_to_b64(audio_bytes: bytes) -> str:
+    return base64.b64encode(audio_bytes).decode()
 
 def _build_prompt(lang: str, allergens: list, flavors: list, dietary: str) -> str:
     allergen_str = ", ".join(allergens) or "none"
@@ -249,6 +255,54 @@ def call_gemini(img: Image.Image, api_key: str, lang: str, allergens: list,
     except json.JSONDecodeError as exc:
         return None, f"Could not parse AI response: {exc}\n\nRaw snippet:\n{raw_text[:400]}"
 
+def call_gemini_chat(audio_bytes, api_key: str, menu_context: list, history: list):
+    """Call Gemini API for the audio chat feature."""
+    audio_b64 = _audio_to_b64(audio_bytes)
+    
+    contents = []
+    
+    context_str = json.dumps(menu_context, indent=2)
+    system_prompt = f"You are MenuMate, an AI assistant helping a user understand a foreign menu. Here is the menu data we extracted:\n{context_str}\n\nPlease answer the user's spoken questions concisely and helpfully based on this menu. Keep answers short and conversational. If the question is unrelated to the menu or food, politely steer them back."
+    
+    for msg in history:
+        contents.append({
+            "role": msg["role"],
+            "parts": [{"text": msg["content"]}]
+        })
+        
+    payload = {
+        "systemInstruction": {
+            "parts": [{"text": system_prompt}]
+        },
+        "contents": contents + [{
+            "role": "user",
+            "parts": [
+                {"inline_data": {"mime_type": "audio/wav", "data": audio_b64}}
+            ]
+        }],
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 1024},
+    }
+    
+    try:
+        resp = requests.post(
+            GEMINI_API_URL,
+            params={"key": api_key},
+            json=payload,
+            timeout=30,
+        )
+    except requests.exceptions.Timeout:
+        return None, "Request timed out. Check your network and try again."
+    except requests.exceptions.RequestException as exc:
+        return None, f"Network error: {exc}"
+
+    if resp.status_code != 200:
+        return None, f"Gemini API error {resp.status_code}: {resp.text[:300]}"
+
+    try:
+        raw_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        return raw_text, None
+    except (KeyError, IndexError):
+        return None, "Unexpected API response structure."
 
 def google_image_url(keyword: str) -> str:
     return "https://www.google.com/search?tbm=isch&q=" + urllib.parse.quote(keyword)
@@ -388,6 +442,11 @@ if image_data:
                 st.error(f"Error: {error}")
 
             elif dishes:
+                # Save to session state for chat context
+                st.session_state.menu_context = dishes
+                # Clear chat history when a new menu is analyzed
+                st.session_state.chat_history = []
+                
                 # ── Summary metrics ───────────────────────────────────────────
                 warned = [d for d in dishes if d.get("allergen_warnings")]
                 safe_recommended = [
@@ -427,6 +486,43 @@ if image_data:
                     )
                     for i, dish in enumerate(remaining):
                         render_dish_card(dish, i)
+
+# ── Step 6 — AUDIO CHAT ───────────────────────────────────────────────────────
+
+if st.session_state.menu_context:
+    st.markdown("---")
+    st.markdown("### 💬 Chat with MenuMate")
+    st.caption("Ask questions about the menu you just scanned using your voice.")
+    
+    # Display chat history
+    for msg in st.session_state.chat_history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            
+    # Audio input for new question
+    audio_val = st.audio_input("Record your question")
+    
+    if audio_val and api_key:
+        with st.spinner("MenuMate is thinking..."):
+            audio_bytes = audio_val.getvalue()
+            # Send to Gemini
+            response, chat_error = call_gemini_chat(
+                audio_bytes,
+                api_key,
+                st.session_state.menu_context,
+                st.session_state.chat_history
+            )
+            
+            if chat_error:
+                st.error(f"Error: {chat_error}")
+            elif response:
+                # Add to history
+                # We can't easily display the user's audio back as text in the history unless we transcribe it.
+                # For now, we'll just show an indicator that the user asked an audio question.
+                st.session_state.chat_history.append({"role": "user", "content": "*(Audio Question)*"})
+                st.session_state.chat_history.append({"role": "model", "content": response})
+                
+                st.rerun()
 
 else:
     # Default empty state
