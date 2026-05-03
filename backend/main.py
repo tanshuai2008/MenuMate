@@ -31,18 +31,16 @@ def _image_to_b64(img: Image.Image) -> str:
     img.save(buf, format="JPEG", quality=85)
     return base64.b64encode(buf.getvalue()).decode()
 
-def _build_prompt() -> str:
-    # MVP Simplified prompt without extra parameters like language or allergens for now,
-    # as we just want the core "Capture Image -> Recognize" loop to work.
-    return """You are a Michelin-star food critic and linguistic expert helping a traveler decode a foreign menu.
+def _build_prompt(target_language: str) -> str:
+    return f"""You are a Michelin-star food critic and linguistic expert helping a traveler decode a foreign menu.
 
 Task: Analyze the menu image and identify every dish name visible.
 For EACH dish return a JSON object with these exact keys:
 
 - "original_name"        : string — name exactly as printed on the menu
-- "translated_name"      : string — name translated into English
+- "translated_name"      : string — name translated into {target_language}
 - "pronunciation_guide"  : string — phonetic guide for the original name (e.g. "ri-ZOT-toh al-la MIL-a-nay-zeh")
-- "description"          : string — 1-2 sentences in English describing taste, texture, cooking style. Be specific and appetizing.
+- "description"          : string — 1-2 sentences in {target_language} describing taste, texture, cooking style. Be specific and appetizing.
 - "main_ingredients"     : array of strings — top 4-6 ingredients
 - "taste_tags"           : array — pick applicable: ["Spicy","Sweet","Sour","Savory","Mild","Rich/Creamy","Bitter","Umami"]
 - "calories_estimate"    : string or null — rough range e.g. "450-600 kcal"
@@ -52,7 +50,7 @@ Return ONLY a valid JSON array containing these objects. No markdown fences, no 
 """
 
 @app.post("/api/v1/analyze")
-async def analyze_menu(file: UploadFile = File(...)):
+async def analyze_menu(file: UploadFile = File(...), target_language: str = Form("English")):
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="Gemini API Key is missing in backend")
@@ -68,7 +66,7 @@ async def analyze_menu(file: UploadFile = File(...)):
     payload = {
         "contents": [{
             "parts": [
-                {"text": _build_prompt()},
+                {"text": _build_prompt(target_language)},
                 {"inline_data": {"mime_type": "image/jpeg", "data": _image_to_b64(image)}},
             ]
         }],

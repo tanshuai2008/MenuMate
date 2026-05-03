@@ -8,6 +8,7 @@ export default function App() {
   const [dishes, setDishes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [apiUrl, setApiUrl] = useState('http://192.168.1.100:8000/api/v1/analyze'); // Replace with actual local IP
+  const [targetLanguage, setTargetLanguage] = useState('English');
 
   const pickImage = async () => {
     let result = await ImagePicker.launchImageLibraryAsync({
@@ -49,6 +50,7 @@ export default function App() {
 
     let formData = new FormData();
     formData.append('file', { uri: localUri, name: filename, type });
+    formData.append('target_language', targetLanguage);
 
     try {
       const response = await axios.post(apiUrl, formData, {
@@ -82,6 +84,13 @@ export default function App() {
           value={apiUrl}
           onChangeText={setApiUrl}
           autoCapitalize="none"
+        />
+        <Text style={[styles.label, { marginTop: 10 }]}>Target Language:</Text>
+        <TextInput
+          style={styles.input}
+          value={targetLanguage}
+          onChangeText={setTargetLanguage}
+          placeholder="e.g. English, Arabic, Spanish"
         />
       </View>
 
